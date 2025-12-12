@@ -1,0 +1,4 @@
+obj/test/*
+obj/prod/*
+bin/mk64tt_dev
+bin/mk64tt
