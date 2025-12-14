@@ -68,6 +68,7 @@ Now run the `process` script, which will:
   - __Not__ do a race or anything else that will result in adding data
     - Use the `run_mpk` script discussed below if you want to test the ghost out
 - Copy the mpk file in `save/` along with any changes you made to `mpk/`
+
 The script's argument is the dex file's name without the extension.
 
 ```bash
