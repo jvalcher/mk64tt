@@ -1,0 +1,9 @@
+#!/bin/bash
+
+#
+# Start mupen64plus in order to generate tmp/file.mpk to be used by `./process`
+#
+source rom
+
+mupen64plus --configdir $(pwd)/config --set Core[SaveSRAMPath]=$(pwd)/save $ROM
+

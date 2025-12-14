@@ -1,0 +1,38 @@
+#!/bin/bash
+
+#
+# Process dex file
+#
+# Usage: 
+#   ./process LR_3lap   (no extension)
+#
+source rom
+
+mpk_file=(save/*.mpk)
+MUP_MPK="${mpk_file##*/}"
+
+[[ $# -eq 1 ]] || { 
+    echo "Usage: $0 <arg>"; 
+    exit 1; 
+}
+[[ -f "dex/$1.dex" ]] || { 
+    echo "File not found: dex/$1.mpk"; 
+    exit 1; 
+}
+
+printf "Converting dex/$1.dex to mpk/$1.mpk... "
+dex_to_mpk dex/$1.dex mpk/$1.mpk
+printf "done\n"
+
+printf "Copying mpk/$1.mpk to save/\"$MUP_MPK\"... "
+cp mpk/$1.mpk save/"$MUP_MPK"
+printf "done\n"
+
+printf "Starting mupen64plus with mpk/$1.mpk ghost data... "
+mupen64plus --configdir $(pwd)/config --set Core[SaveSRAMPath]=$(pwd)/save $ROM >/dev/null 2>&1
+printf "exited\n"
+
+printf "Copying updated save/\"$MUP_MPK\" to mpk/$1.mpk... "
+cp save/"$MUP_MPK" mpk/$1.mpk
+printf "done\n"
+

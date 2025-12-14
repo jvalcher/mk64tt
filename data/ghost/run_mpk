@@ -1,0 +1,23 @@
+#!/bin/bash
+
+#
+# Run mpk file
+# --------
+# Usage:
+#   ./run_mpk BB_3lap
+#
+source rom
+
+[[ -f "mpk/$1.mpk" ]] || { 
+    echo "File not found: mpk/$1.mpk"; 
+    exit 1; 
+}
+
+mpk_file=(save/*.mpk)
+MUP_MPK="${mpk_file##*/}"
+
+[[ $# -eq 1 ]] || { echo "Usage: $0 <arg>"; exit 1; }
+
+cp mpk/$1.mpk save/"$MUP_MPK"
+mupen64plus --configdir $(pwd)/config --set Core[SaveSRAMPath]=$(pwd)/save $ROM
+
