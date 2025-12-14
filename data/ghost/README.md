@@ -75,7 +75,7 @@ The script's argument is the dex file's name without the extension.
 ./process LR_3lap
 ```
 
-And we're done. You should now have an updated mpk file in `mpk/`. You can test it out with `run_mpk` (see below) before rebuilding `mk64tt` with your new ghost and hopefully submit a PR!
+And we're done. You should now have an updated mpk file in `mpk/`. You can test it out with `run_mpk` (see below) before rebuilding `mk64tt` with your new ghost and hopefully submitting a PR!
 
 
 If you want to edit an existing mpk file, use `edit_mpk`.
