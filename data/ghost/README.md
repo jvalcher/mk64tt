@@ -1,7 +1,7 @@
 
 # Ghost data
 
-The dex files and info for record-holding ghosts were sourced from the [MK64 Ghost Database](https://docs.google.com/spreadsheets/u/0/d/1cgya3QHo3wLav4cNOn3JfJ1SMtc7CZ89sIflolzQj-w/htmlview#gid=1676616222).
+The dex files and info for record-holding ghosts are sourced from the [MK64 Ghost Database](https://docs.google.com/spreadsheets/u/0/d/1cgya3QHo3wLav4cNOn3JfJ1SMtc7CZ89sIflolzQj-w/htmlview#gid=1676616222).
 
 
 
@@ -30,7 +30,7 @@ Before proceeding, it will be helpful to understand a little bit about the files
 - .mpk: emulates saving to the N64 Controller Pak (dex file converted to this)
 - .eep: emulates saving to the N64 EEPROM memory
 
-Mupen64plus uses a ROM's "Goodname" value and the first 8 characters of its MD5 checksum separated by a hyphen when it auto-generate its eek and mpk files. For example...
+Mupen64plus uses a ROM's "Goodname" value and the first 8 characters of its MD5 checksum separated by a hyphen when it auto-generates its eek and mpk files. For example...
 ```
 Mario Kart 64 (U) [!]-3A67D998.eep
 Mario Kart 64 (U) [!]-3A67D998.mpk
