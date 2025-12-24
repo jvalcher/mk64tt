@@ -22,9 +22,9 @@ FILE *log_file_stream = NULL;
 
 int close_log_stream(void)
 {
-    errno = 0;
     if (fclose(log_file_stream) == EOF) {
-        fprintf(stderr, "Failed to close log file: %s\n", strerror(errno));
+        fprintf(stderr, "Failed to close log file \"%s\": %s\n", 
+                log_file_path, strerror(errno));
         return -1;
     }
     log_file_stream = NULL;
@@ -43,7 +43,6 @@ static int open_log_file(const char *log_path)
         return -1;
     }
 
-    errno = 0;
     log_file_stream = fopen(log_path, LOG_FILE_MODE);
     if (log_file_stream == NULL) {
         fprintf(stderr, "Failed to open log file \"%s\": %s\n", 
@@ -56,10 +55,19 @@ static int open_log_file(const char *log_path)
 
 int init_log_stream(const char *log_path)
 {
-    if (log_path == NULL)
-        log_file_path = concat_strs(getenv("HOME"), LOG_DEFAULT_PATH);
-    else
+    if (log_path == NULL) {
+        if (asprintf(&log_file_path, "%s%s", getenv("HOME"), LOG_DEFAULT_PATH) == -1) {
+            fprintf(stderr, "Failed to create default log file path string\n");
+            return -1;
+        }
+    } else {
         log_file_path = strdup(log_path);
+        if (!log_file_path) {
+            fprintf(stderr, "Failed to duplicate log file path \"%s\": %s\n", 
+                    log_path, strerror(errno));
+            return -1;
+        }
+    }
 
     if (open_log_file(log_file_path) == -1) {
         free(log_file_path);

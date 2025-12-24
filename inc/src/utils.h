@@ -7,41 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
-
-
-
-/*
-    Concatenate strings
-    -------
-    - Combine maximum of <MAX_STRS> strings
-    - Returns: 
-        - String pointer
-        - NULL on failure
-    - Usage:
-        char *str = concat_strings(str1, str2, str3);
-        free(str);
-*/
-#define MAX_STRS  48
-char *concat_strs_impl(int num_strings, ...);
-    //
-#define concat_strs(...) concat_strs_impl(MAX_STRS, __VA_ARGS__, NULL)
-
-
-
-/*
-    Create directory
-    -------
-    Functions like `mkdir -p`, creating parent directories as needed
-
-    Parameters:
-    - dir_path: absolute path
-    - mode: directory permissions, e.g. 0755
-
-    Returns:
-    -  0: success
-    - -1: failure
-*/
-int create_dir(const char *dir_path, int mode);
+#include <errno.h>
 
 
 
@@ -72,7 +38,7 @@ extern FILE *log_file_stream;
 //
 // Open log file stream
 // -----------
-// - log_path: absolute path to log file, NULL to use LOG_DEFAULT_PATH
+// - log_path: absolute path to log file, NULL to use $HOME+LOG_DEFAULT_PATH
 // - Returns 0 on success, -1 on error
 //
 int init_log_stream(const char *log_path);
@@ -84,9 +50,24 @@ int init_log_stream(const char *log_path);
 //
 int close_log_stream(void);
 
-//
+// Print log path information message
+void print_see_log_msg(void);
+
+// Formatted log (no info)
+#define _logf(...) \
+do { \
+    if (log_file_stream) { \
+        fprintf((log_file_stream), __VA_ARGS__); \
+    } \
+} while (0)
+
+// Formatted print
+#define _logpf(...) \
+do { \
+    fprintf(stderr, __VA_ARGS__); \
+} while (0)
+
 // Log
-//
 #define _log(...) \
 do { \
     if (log_file_stream) { \
@@ -96,9 +77,7 @@ do { \
     } \
 } while (0)
 
-//
 // Log errno
-//
 #define _loge(...) \
 do { \
     _log(__VA_ARGS__); \
@@ -106,9 +85,7 @@ do { \
         fprintf((log_file_stream), "    errno: %s\n", strerror(errno)); \
 } while (0)
 
-//
 // Log + print
-//
 #define _logp(...) \
 do { \
     _log(__VA_ARGS__); \
@@ -116,9 +93,7 @@ do { \
     fprintf(stderr, "\n"); \
 } while (0)
 
-//
 // Log + print errno
-//
 #define _logpe(...) \
 do { \
     _loge(__VA_ARGS__); \
@@ -126,8 +101,19 @@ do { \
     fprintf(stderr, ": %s\n", strerror(errno)); \
 } while (0)
 
-// Print log path information message
-void print_see_log_msg(void);
+
+
+/*
+   Create directory in the style of `mkdir -p`
+   --------
+   - Returns 0 on success, -1 on failure
+*/
+int mkdir_p(const char *path, mode_t mode);
+
+/*
+    Check if directory exists
+*/
+bool dir_exists(const char *path);
 
 
 
