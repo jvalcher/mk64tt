@@ -1,12 +1,12 @@
 
-bin/mk64tt*
+bin/mk64t*
 bin/test/*
 
 data/ghost/dex_to_mpk
 data/ghost/config/*
 data/ghost/save/*
 
-src/ghost_data_tmp
+src/rec_dex/dex_*.c
 
 *.o
-
+*.d

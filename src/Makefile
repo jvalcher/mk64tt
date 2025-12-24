@@ -7,17 +7,16 @@ cflags := -Wall -Wextra
 cflags_dev := -g3
 cflags_prod := -O2
 
-build_targs :=
-clean_targs :=
-
 include ../Makesuite.mk
 
-$(eval $(call BUILD_SRC,mupen64plus,$(build)))
+$(eval $(call BUILD_SRC,categ,$(build)))
 
-$(eval $(call BUILD_DIR,ghost_data,$(build)))
+$(eval $(call BUILD_DIR,rec_dex,$(build)))
+
+mupen64plus_cflags := -Wall -Wextra $(shell sdl2-config --cflags)
+$(eval $(call BUILD_SRC,mup,$(build)))
+
+$(eval $(call BUILD_SRC,save_dirs,$(build)))
+
 $(eval $(call BUILD_DIR,utils,$(build)))
-
-.PHONY: all clean
-all: $(build_targs)
-clean: $(clean_targs)
 
