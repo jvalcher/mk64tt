@@ -23,33 +23,35 @@ define CHECK_GLOBAL_DEF
 $(if $(filter undefined,$(origin $(1))),\
   	$(error Empty '$(1)' global variable not found, '$(1) :='))
 endef
-
 define CHECK_GLOBAL_SET
-$(if $(filter undefined,$(origin $(1))),\
-	$(error Global variable '$(1)' not set, e.g. '$(1) := $(2)'))
+$(if \
+	$(or \
+		$(filter undefined,$(origin $(1))),\
+		$(strip $($(1)))
+	),,\
+		$(error Global variable '$(1)' not set, e.g. '$(1) := $(2)'))
 endef
 
-# Check if custom module variable defined, if not, set to default
 define RESOLVE_VAR
-$(eval $(1)_$(2) := \
+$(1)_$(2) := \
   $(if $(filter undefined,$(origin $(1)_$(2))), \
       $($(2)), \
-      $($(1)_$(2))))
+      $($(1)_$(2)))
 endef
 define RESOLVE_BUILD_CFLAGS
-$(eval $(1)_cflags += \
+$(1)_cflags += \
   $(if $(filter undefined,$(origin $(1)_$(2))), \
       $($(2)), \
-      $($(1)_$(2))))
+      $($(1)_$(2)))
 endef
 
-define GET_GLOBALS_EXT_CC_CFLAGS
+define GET_GLOBALS_EXT_CC_CFLAGS_LIBS
 $(eval $(call CHECK_GLOBAL_SET,ext,c))
 $(eval $(call CHECK_GLOBAL_SET,cc,gcc))
-
 $(eval $(call RESOLVE_VAR,$(1),ext))
 $(eval $(call RESOLVE_VAR,$(1),cc))
 $(eval $(call RESOLVE_VAR,$(1),cflags))
+$(eval $(call RESOLVE_VAR,$(1),libs))
 endef
 
 define GET_GLOBALS_BUILD_CFLAGS
@@ -67,19 +69,43 @@ __DEPS_INCLUDED := 1
 endif
 endef
 
-define TEST_ALL_CLEAN_RULES
-.PHONY: $(1) $(2)
-$(1): $(test_targs)
-$(2): $(test_clean_targs)
+define CREATE_BUILD_CLEAN_ALL_TARGS
+ifndef __BUILD_CLEAN_TARGS_CREATED
+__BUILD_CLEAN_TARGS_CREATED := 1
+
+build_targs :=
+build_clean_targs :=
+
+.PHONY: build_all clean_all
+.SECONDEXPANSION:
+build_all: $$$$(build_targs)
+clean_all: $$$$(build_clean_targs)
+
+endif
+endef
+
+define CREATE_TEST_CLEAN_TARGS
+ifndef __TEST_CLEAN_TARGS_CREATED
+__TEST_CLEAN_TARGS_CREATED := 1
+
+test_targs :=
+clean_test_targs :=
+
+.PHONY: run_all clean_test_all
+.SECONDEXPANSION:
+run_all: $$$$(test_targs)
+clean_test_all: $$$$(clean_test_targs)
+
+endif
 endef
 
 define SET_VERBOSITY
-ifndef __VERBOSITY_CHECKED
-__VERBOSITY_CHECKED := 1
+ifndef __VERBOSITY_SET
+__VERBOSITY_SET := 1
 v ?= 1
 ifeq ($(v),0)
-MAKEFLAGS += --no-print-directory
 q := @
+MAKEFLAGS += --no-print-directory
 else
 q :=
 endif
@@ -118,39 +144,37 @@ endef
 #	$(1)_cflags_prod := -O1
 #	$(1)_cflags_dev := -Og -g3
 #
-#	# all:, clean: prerequisites
-#	build_targs :=
-#	clean_targs :=
-#
-#
 define BUILD_SRC
 
-$(eval $(call CHECK_BUILD,$(2)))
-$(eval $(call GET_GLOBALS_EXT_CC_CFLAGS,$(1),$(2)))
-$(eval $(call GET_GLOBALS_BUILD_CFLAGS,$(1),$(2)))
 $(eval $(call SET_VERBOSITY))
-
-$(eval build_targs += $(1))
-$(eval clean_targs += clean_$(1))
-
-$(eval $(1)_inc_dir := ../inc/src)
-$(eval $(1)_obj_root := ../obj)
-$(eval $(1)_obj_dir := $$($(1)_obj_root)/$(2))
-
+$(eval $(call CHECK_BUILD,$(2)))
+$(eval $(call GET_GLOBALS_EXT_CC_CFLAGS_LIBS,$(1),$(2)))
+$(eval $(call GET_GLOBALS_BUILD_CFLAGS,$(1),$(2)))
+$(eval $(call CREATE_BUILD_CLEAN_ALL_TARGS))
 $(eval $(call INC_DEPS,$(2)))
 
-$(eval $(1)_src := $(1).$(ext))
-$(eval $(1)_obj := $$($(1)_obj_dir)/$(1).o)
-$(eval $(1)_d := $$($(1)_obj:.o=.d))
+build_targs += build_$(1)
+build_clean_targs += clean_$(1)
 
-.PHONY: $(1)
-$(1): $$($(1)_obj)
+$(1)_inc_dir := ../inc/src
+$(1)_obj_root := ../obj
+$(1)_obj_dir := $$($(1)_obj_root)/$(2)
+
+$(1)_src := $(1).$(ext)
+$(1)_obj := $$($(1)_obj_dir)/$(1).o
+$(1)_d := $$($(1)_obj:.o=.d)
+
+.PHONY: build_$(1)
+build_$(1): $$($(1)_obj)
 
 $$($(1)_obj): $$($(1)_src) | $$($(1)_obj_dir)
-	$(q)$$($(1)_cc) $$($(1)_cflags) -I$$($(1)_inc_dir) -MMD -MP -c $$< -o $$@
+	$(q)$$($(1)_cc) $$($(1)_cflags) -MMD -MP -I$$($(1)_inc_dir) -c $$< -o $$@
 
+ifndef __OBJ_DIR_CREATED
+__OBJ_DIR_CREATED := 1
 $$($(1)_obj_dir):
 	$(q)mkdir -p $$@
+endif
 
 .PHONY: clean_$(1)
 clean_$(1):
@@ -186,41 +210,37 @@ endef
 #	$(1)_cflags_prod := -O1
 #	$(1)_cflags_dev := -Og -g3
 #
-#	# all:, clean: prerequisites
-#	build_targs :=
-#	clean_targs :=
-#
 define BUILD_DIR
 
-$(eval $(call CHECK_BUILD,$(2)))
-$(eval $(call GET_GLOBALS_EXT_CC_CFLAGS,$(1),$(2)))
-$(eval $(call GET_GLOBALS_BUILD_CFLAGS,$(1),$(2)))
 $(eval $(call SET_VERBOSITY))
-
-$(eval build_targs += $(1))
-$(eval clean_targs += clean_$(1))
-
-$(eval $(1)_inc_dir := ../inc/src)
-$(eval $(1)_obj_root := ../obj)
-$(eval $(1)_obj_dir := $$($(1)_obj_root)/$(2))
-$(eval $(1)_objs_dir := $$($(1)_obj_dir)/$(1))
-
+$(eval $(call CHECK_BUILD,$(2)))
+$(eval $(call GET_GLOBALS_EXT_CC_CFLAGS_LIBS,$(1),$(2)))
+$(eval $(call GET_GLOBALS_BUILD_CFLAGS,$(1),$(2)))
+$(eval $(call CREATE_BUILD_CLEAN_ALL_TARGS))
 $(eval $(call INC_DEPS,$(2)))
 
-$(eval $(1)_srcs := $$(wildcard $(1)/*.$(ext)))
-$(eval $(1)_objs := $$(patsubst $(1)/%.$(ext),$$($(1)_objs_dir)/%.o,$$($(1)_srcs)))
-$(eval $(1)_obj := $$($(1)_obj_dir)/$(1).o)
-$(eval $(1)_ds := $$($(1)_objs:.o=.d))
-$(eval $(1)_d := $$($(1)_obj:.o=.d))
+build_targs += build_$(1)
+build_clean_targs += clean_$(1)
 
-.PHONY: $(1)
-$(1): $$($(1)_obj)
+$(1)_inc_dir := ../inc/src
+$(1)_obj_root := ../obj
+$(1)_obj_dir := $$($(1)_obj_root)/$(2)
+$(1)_objs_dir := $$($(1)_obj_dir)/$(1)
+
+$(1)_srcs := $$(wildcard $(1)/*.$(ext))
+$(1)_obj := $$($(1)_obj_dir)/$(1).o
+$(1)_objs := $$(patsubst $(1)/%.$(ext),$$($(1)_objs_dir)/%.o,$$($(1)_srcs))
+$(1)_d := $$($(1)_obj:.o=.d)
+$(1)_ds := $$($(1)_objs:.o=.d)
+
+.PHONY: build_$(1)
+build_$(1): $$($(1)_obj)
 
 $$($(1)_obj): $$($(1)_objs)
 	$(q)$$($(1)_cc) -r $$^ -o $$@
 
 $$($(1)_objs_dir)/%.o: $(1)/%.$(ext) | $$($(1)_objs_dir)
-	$(q)$$($(1)_cc) $$($(1)_cflags) -I$$($(1)_inc_dir) -MMD -MP -c $$< -o $$@
+	$(q)$$($(1)_cc) $$($(1)_cflags) -MMD -MP -I$$($(1)_inc_dir) -c $$< -o $$@
 
 $$($(1)_objs_dir):
 	$(q)mkdir -p $$@
@@ -238,7 +258,7 @@ endef
 
 
 # ------------------------------------
-# TEST_MODULE - build, run module test
+# RUN_TEST - build, run test
 # ------------------------------------
 #
 # Parameters:
@@ -252,58 +272,78 @@ endef
 #   ext := c
 # 	cc := gcc
 #	cflags := -g -Wall -Wextra
+#	libs := $(shell pkg-config --libs sdl2)
+#	
 #
 #	# Per-test file
 #	$(1)_ext := cpp
 #	$(1)_cc := clang
-#	$(1)_cflags := -g -Wall -Wextra -Wpedantic
+#	$(1)_cflags := -g -Wall -Wextra $(shell sdl2-config --cflags)
+#	$(1)_libs := $(shell pkg-config --libs sdl2)
 #
 #	# src/, test/ module dependencies
-#	$(1)_mod_deps := file subproc
+#	$(1)_obj_deps := file subproc
 #	$(1)_test_deps := tools random
 #
-define TEST_MODULE
+define RUN_TEST
 
-$(eval $(call CHECK_BUILD,$(2)))
-$(eval $(call GET_GLOBALS_EXT_CC_CFLAGS,$(1),$(2)))
 $(eval $(call SET_VERBOSITY))
+$(eval $(call CHECK_BUILD,$(2)))
+$(eval $(call GET_GLOBALS_EXT_CC_CFLAGS_LIBS,$(1),$(2)))
+$(eval $(call CREATE_TEST_CLEAN_TARGS))
 
-$(eval test_targs += $(1))
-$(eval test_clean_targs += clean_$(1))
+test_targs += test_$(1)
+clean_test_targs += clean_test_$(1)
 
-$(eval $(1)_inc_dir := ../inc/src)
-$(eval $(1)_test_inc_dir := ../inc/test)
-$(eval $(1)_obj_root := ../obj)
-$(eval $(1)_obj_dir := ../obj/$(2))
-$(eval $(1)_src_dir := ../src)
+$(1)_inc_dir := ../inc/src
+$(1)_test_inc_dir := ../inc/test
+$(1)_src_dir := ../src
+$(1)_bin_dir := ../bin/test
+$(1)_obj_root := ../obj
+$(1)_obj_dir := ../obj/$(2)
 
-$(eval $(1)_bin_dir := ../bin/test)
-$(eval $(1)_bin := $$($(1)_bin_dir)/$(1))
+$(1)_bin := $$($(1)_bin_dir)/$(1)
 
-$(eval $(1)_mod_obj := $$($(1)_obj_dir)/$(1).o)
-$(eval $(1)_mod_dep_objs := \
-  $(addprefix $($(1)_obj_dir)/, \
-    $(addsuffix .o, $($(1)_mod_deps))))
-$(eval $(1)_test_dep_objs := \
-  $(addprefix $($(1)_obj_root)/test/, \
-    $(addsuffix .o, $($(1)_test_deps))))
+$(if $(filter undefined,$(origin $(1)_obj_deps)),, \
+  $(1)_obj_dep_objs := \
+	$(addprefix $$($(1)_obj_dir)/, \
+	  $(addsuffix .o, $($(1)_obj_deps))))
+$(if $(filter undefined,$(origin $(1)_testobj_deps)),, \
+  $(1)_testobj_dep_objs := \
+    $(addprefix $$($(1)_obj_root)/test/, \
+      $(addsuffix .o, $($(1)_testobj_deps))))
+#$$(info OBJ: $$($(1)_obj_dep_objs))
+#$$(info TESTOBJ: $$($(1)_testobj_dep_objs))
 
-.PHONY: $(1)
-$(1): $$($(1)_bin_dir)
+.PHONY: test_$(1)
+test_$(1): $(1)_build_obj_deps $(1)_build_testobj_deps | $$($(1)_bin_dir)
 	$(q)$(cc) $$($(1)_cflags) -I$$($(1)_inc_dir) -I$$($(1)_test_inc_dir) \
-		$(1)_test.$(ext) \
-		$$($(1)_mod_obj) \
-		$$($(1)_mod_dep_objs) \
-		$$($(1)_test_dep_objs) \
-		-o $$($(1)_bin)
+		test_$(1).$(ext) \
+		$$($(1)_obj_dep_objs) \
+		$$($(1)_testobj_dep_objs) \
+		-o $$($(1)_bin) \
+		$$($(1)_libs)
 	$(q)./$$($(1)_bin)
 
-.PHONY: clean_$(1)
-clean_$(1):
+.PHONY: $(1)_build_obj_deps
+$(1)_build_obj_deps:
+	$(if $($(1)_obj_deps),\
+		$(q)$(MAKE) -C $$($(1)_src_dir) $(addprefix build_,$($(1)_obj_deps)) build=$(2),)
+
+.PHONY: $(1)_build_testobj_deps
+$(1)_build_testobj_deps:
+	$(if $($(1)_testobj_deps),\
+		$(q)$(MAKE) $(addprefix build_,$($(1)_testobj_deps)) build=test,)
+
+.PHONY: clean_test_$(1)
+clean_test_$(1):
 	$(q)rm -f $$($(1)_bin)
 
+ifndef __TEST_BIN_CREATED
+__TEST_BIN_CREATED := 1
 $$($(1)_bin_dir):
 	$(q)mkdir -p $$@
+endif
 
 endef
 
