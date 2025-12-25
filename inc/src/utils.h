@@ -1,19 +1,25 @@
 /*
     Miscellaneous utilities
 */
-#ifndef MK64TT_UTILS_H
-#define MK64TT_UTILS_H
+#ifndef UTILS_H
+#define UTILS_H
 
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 #include <errno.h>
 
+#ifdef _WIN32
+#else
+#define LOG_DEFAULT_PATH   "/.local/share/mk64t/log"
+#endif
+
 
 
 /*
     Log, print formatted error messages
     ----------
+    - Requires setting LOG_DEFAULT_PATH, "/.../..."
     - Example usage:
 
         init_log_stream(NULL);
@@ -26,11 +32,6 @@
         close_log_stream();
         print_see_log_msg();
 */
-#ifdef _WIN32
-#else
-#define LOG_DEFAULT_PATH   "/.local/share/mk64tt/log"
-#endif
-
 #define LOG_STREAM_OPEN  log_file_stream
 
 extern FILE *log_file_stream;
