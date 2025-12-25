@@ -6,13 +6,23 @@
 
 #include <stdbool.h>
 
+#ifdef _WIN32
+#else
+#define MUP_CONFIG_DIR_PATH  "/.config/mk64t/mupen64plus/config"
+#endif
+
 
 
 /*
     Initialize mupen64plus process command
     -------
-    - mup_load_rom, mup_load_bin must be called before mup_init
-    - mup_cmd_add_arg: add individual flag, option, value, etc. (in correct order)
+    - Required function calls before mup_init():
+        - mup_load_rom: load ROM path
+        - mup_load_bin: load mupen64plus binary path
+        - mup_set_categ_type:
+            - categ: track, category string (track_categ.h)
+            - type: CATEG_DEF, CATEG_REC, CATEG_USR (save_dirs.h)
+    - mup_cmd_add_arg: add individual mupen64plus flag, option, value, etc.
     - mup_init
         - Creates mk64 command
         - Gets ROM data
@@ -22,11 +32,12 @@
             - type: CATEG_DEF, CATEG_REC, CATEG_USR (save_dirs.h)
     - Return 0 on sucess, -1 on failure
 */
-int mup_load_bin(const char *path);
-int mup_load_rom(const char *path);
-int mup_add_arg(const char *str);
+int mup_load_bin(mup_proc_t *mp, const char *path);
+int mup_load_rom(mup_proc_t *mp, const char *path);
+int mup_set_categ_type(mup_proc_t *mp, const char *categ, int type)
+int mup_add_arg(mup_proc_t *mp, const char *str);
     //
-int mup_init(const char *categ, int type)
+int mup_init(mup_proc_t **mp)
 
 /*
     Start mupen64plus process

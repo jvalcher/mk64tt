@@ -31,11 +31,6 @@
 #include "save_dirs.h"
 #include "mup.h"
 
-#ifdef _WIN32
-#else
-#define MUP_CONFIG_DIR_PATH  "/.config/mk64tt/mupen64plus/config"
-#endif
-
 #define R         "\033[1;0m"  // reset to default
 #define RED       "\033[1;31m"
 #define CYAN      "\033[1;36m"
@@ -46,21 +41,7 @@
 #define MUP_OUTPUT_BUF_SIZE  2048
 #define MUP_ERR_BUF_SIZE  256
 #define ROM_INFO_BUF_SIZE  48
-
-static char rom_goodname_buf[ROM_INFO_BUF_SIZE];
-static char rom_md5_buf[ROM_INFO_BUF_SIZE];
-static char rom_country_buf[ROM_INFO_BUF_SIZE];
-static char rom_imagetype_buf[ROM_INFO_BUF_SIZE];
-static char rom_mup_id_buf[ROM_INFO_BUF_SIZE];
-static bool mup_err_occurred = false;
-static char mup_err_buf[MUP_ERR_BUF_SIZE];
-
-static bool mup_initialized = false;
-static int mup_pty_fd;
-static pid_t mup_pid;
-static char **mup_cmd = NULL;
-static int rom_index;
-static char categ[12];
+#define TRACK_CATEG_BUF_SIZE  12
 
 typedef struct mup_cmd_arg {
     char *str;
@@ -75,26 +56,41 @@ typedef struct {
     int arg_count;
 } mup_cmd_list_t;
 
-static mup_cmd_list_t mup_cmd_list = { 
-    .bin: NULL, 
-    .arg_head: NULL, 
-    .arg_tail: NULL, 
-    .rom: NULL, 
-    .arg_count: 0 
-};
+typedef struct {
+    pid_t pid;
+    int pty_fd;
+
+    mup_cmd_list_t cmd_list;
+    char **cmd;
+    char *config_path;
+    char *save_path;
+    int ghost_type;
+    char track_categ[TRACK_CATEG_BUF_SIZE];
+    int rom_index;
+    int save_opt_index;
+
+    char rom_goodname_buf[ROM_INFO_BUF_SIZE];
+    char rom_md5_buf[ROM_INFO_BUF_SIZE];
+    char rom_country_buf[ROM_INFO_BUF_SIZE];
+    char rom_imagetype_buf[ROM_INFO_BUF_SIZE];
+    char rom_mup_id_buf[ROM_INFO_BUF_SIZE];
+
+    bool error_occurred;
+    char err_buf[MUP_ERR_BUF_SIZE];
+} mup_proc_t
 
 static int get_screen_resolution(int *w, int *h);
-static void destroy_mup_cmd_list(void);
-static mup_arg_t* mup_cmd_list_arg_create(const char *str);
-static bool mup_cmd_list_arg_is_set(const char *str);
-static void destroy_mup_cmd(void);
-static int mup_start_impl(void);
+static void destroy_mup_cmd_list(mup_proc_t *mp);
+static mup_arg_t* mup_cmd_list_arg_create(mup_proc_t *mp, const char *str);
+static bool mup_cmd_list_arg_is_set(mup_proc_t *mp, const char *str);
+static void destroy_mup_cmd(mup_proc_t *mp);
+static int mup_start_impl(mup_proc_t *mp);
 static int get_rom_key_val(const char *buf, const char *key, char *ret_buf);
-static int get_rom_info(void);
+static int get_rom_info(mup_proc_t *mp);
 
 
 
-int mup_add_arg(const char *str)
+int mup_add_arg(mup_proc_t *mp, const char *str)
 {
     mup_cmd_list_arg_t *arg = NULL;
 
@@ -107,89 +103,103 @@ int mup_add_arg(const char *str)
     if (!arg)
         return -1;
 
-    if (mup_cmd_list.arg_head == NULL) {
-        mup_cmd_list.arg_head = arg;
-        mup_cmd_list.tail = arg;
+    if (mp->cmd_list.arg_head == NULL) {
+        mp->cmd_list.arg_head = arg;
+        mp->cmd_list.tail = arg;
     } else {
-        mup_cmd_list.tail->next = arg;
-        mup_arg_list.tail = arg;
+        mp->cmd_list.tail->next = arg;
+        mp->arg_list.tail = arg;
     }
 
-    mup_cmd_list.arg_count += 1;
+    mp->cmd_list.arg_count += 1;
 
     return 0;
 }
 
-bool mup_running(void)
+bool mup_running(mup_proc_t *mp)
 {
-    return mup_pid > 0;
+    return mp->pid > 0;
 }
 
-int mup_stop(void)
+int mup_stop(mup_proc_t *mp)
 {
-    _logp("Stopping mupen64plus process...");
-
-    if (mup_pid <= 0) {
-        _logp("Mupen64plus process already stopped");
+    if (mp->pid <= 0) {
         return 0;
     }
 
-    if (kill(-mup_pid, SIGKILL)) {
+    _logp("Stopping mupen64plus process...");
+
+    if (kill(-(mp->pid), SIGKILL)) {
         if (errno == ESRCH)
             return 0;
         _logpe("Mupen64plus process kill failed");   
         return -1;
     }
 
-    if (mup_wait())
+    if (mup_wait(mp))
         return -1;
 
     return 0;
 }
 
-int mup_get_rom_info(void)
+int mup_get_rom_info(mup_proc_t *mp)
 {
-    if (mup_running())
-        if (mup_stop()) 
+    if (mup_running(mp))
+        if (mup_stop(mp)) 
             return -1;
-    if (mup_start_impl())
+
+    if (!mp->cmd_list.rom) {
+        _logp("Unable to get ROM info: ROM path not set");
         return -1;
-    if (get_rom_info())
+    }
+    if (!mp->cmd_list.bin) {
+        _logp("Unable to get ROM info: mupen64plus binary path not set");
         return -1;
-    if (mup_stop())
+    }
+
+    if (mup_start_impl(mp))
+        return -1;
+    if (get_rom_info(mp))
+        return -1;
+    if (mup_stop(mp))
         return -1;
 
     return 0;
 }
 
-int mup_init(const char *categ, int type)
+int mup_init(mup_proc_t **mp)
 {
     int i, w, h;
     char *tmp = NULL;
     char *path = NULL;
     mup_cmd_list_arg_t *curr_arg;
 
-    mup_initialized = false;
+    if (mp->initialized == true) {
+        _logp("Mupen64plus process already initialized");
+        return 0;
+    }
+    mp->initialized = false;
+    mp->
 
-    destroy_mup_cmd_list();
-    destroy_mup_cmd();
+    destroy_mup_cmd_list(mp);
+    destroy_mup_cmd(mp);
 
     // Verify binary, ROM set
-    if (!mup_cmd_list.bin) {
+    if (!(mp->cmd_list.bin)) {
         _logp("Mupen64plus binary not set");
         return -1;
     }
-    if (!mup_cmd_list.rom) {
+    if (!(mp->cmd_list.rom)) {
         _logp("Mupen64plus ROM path not set");
         return -1;
     }
 
     // Create config directory
-    asprintf(&mup_path, "%s%s", getenv("HOME"), MUP_CONFIG_DIR_PATH);
-    if (mkdir_p(mup_path, MK64T_DIR_MODE))
+    asprintf(&mp->config_path, "%s%s", getenv("HOME"), MUP_CONFIG_DIR_PATH);
+    if (mkdir_p(mp->config_path, MK64T_DIR_MODE))
         return -1;
 
-    // Add, create config directory if not set
+    // Add, create config directory
     if (!mup_cmd_list_arg_is_set("--configdir")) {
         mup_arg_add("--configdir");
         asprintf(&tmp, "%s%s", getenv("HOME"), MUP_CONFIG_DIR_PATH);
@@ -200,84 +210,57 @@ int mup_init(const char *categ, int type)
     }
 
     // Get ROM info
-    mup_cmd = calloc(sizeof *mup_cmd * 3);
-    if (!mup_cmd) {
+    mp->cmd = malloc(sizeof *(mp->cmd) * 3);
+    if (!mp->cmd) {
         _logpe("Failed to create mupen64plus command array");
         return -1;
     }
-    mup_cmd[0] = mup_cmd_list.bin;
-    mup_cmd[1] = mup_cmd_list.rom;
-    mup_cmd[2] = NULL;
-    if (mup_get_rom_info())
+    mp->cmd[0] = mp->cmd_list.bin;
+    mp->cmd[1] = mp->cmd_list.rom;
+    mp->cmd[2] = NULL;
+    if (mup_get_rom_info(mp))
         return -1;
-    destroy_mup_cmd();
+    free(mp->cmd);
 
     // Add SRAM save directory path
     mup_arg_add("--set");
-    switch(type) {
-    case CATEG_DEF:
-        __attribute__((fallthrough));
-    case CATEG_USR:
-        if (asprintf(%path, "%s%s%s%s%s", getenv("HOME"), MK64T_BASE_PATH, 
-                     get_save_dir_path(categ, type), "/", rom_mup_id_buf) == -1) {
-            _logp("Failed to create SRAM path string");
-            return -1;
-        }
-        break;
-    case CATEG_REC:
-        if (asprintf(%path, "%s%s%s%s", getenv("HOME"), MK64T_BASE_PATH, 
-                     get_save_dir_path(categ, type)) == -1) {
-            _logp("Failed to create SRAM path string");
-            return -1;
-        }
-        break;
-    }
-    if (asprintf(%tmp, "%s%s", CORE_SRAM_EQ, path) == -1) {
-        _logp("Failed to create SRAM opt string");
-        return -1;
-    }
-    if (type != CATEG_REC && mkdir_p(path, MK64T_DIR_MODE))
-        return -1;
-    mup_arg_add(tmp);
-    free(path);
-    free(tmp);
-    
-    // Create mup_cmd[]
-    mup_cmd = calloc(sizeof *mup_cmd * (mup_cmd_list.arg_count + 3));
-    if (!mup_cmd) {
+    // Create mp->cmd[]
+    mp->cmd = malloc(sizeof *(mp->cmd) * (mp->cmd_list.arg_count + 3));
+    if (!mp->cmd) {
         _logpe("Failed to create mupen64plus command array");
         return -1;
     }
     i = 0;
-    mup_cmd[i++] = mup_cmd_list.bin;
-    curr_arg = mup_cmd_list.head;
-    for (; curr_arg; ++i) {
-        mup_cmd[i] = curr_arg->str;
+    mp->cmd[i++] = mp->cmd_list.bin;
+    for (curr_arg = mp->cmd_list.head; curr_arg; ++i) {
+        if (strstr(curr_arg->str, CORE_SRAM_EQ))
+            mp->save_opt_index = i;
+        mp->cmd[i] = curr_arg->str;
         curr_arg = curr_arg->next;
     }
-    mup_cmd[i] = mup_cmd_list.rom;
-    rom_index = i++;
-    mup_cmd[i] = NULL;
+    mp->cmd[i] = mp->cmd_list.rom;
+    mp->rom_index = i++;
+    mp->cmd[i] = NULL;
 
-    mup_initialized = true;
+    mp->initialized = true;
 
     return 0;
 }
 
-int mup_load_bin(const char *path)
+int mup_load_bin(mup_proc_t *mp, const char *path)
 {
     if (strlen(path) == 0) {
         _logp("Error: empty mupen64plus binary path");
         return -1;
     }
 
-    if (mup_cmd_list.bin) {
-        free(mup_cmd_list.bin);
-        mup_cmd_list.bin = NULL;
+    if (mp->cmd_list.bin) {
+        free(mp->cmd_list.bin);
+        mp->cmd_list.bin = NULL;
     }
 
-    mup_cmd_list.bin = strdup(path);
-    if (!mup_cmd_list.bin) {
+    mp->cmd_list.bin = strdup(path);
+    if (!mp->cmd_list.bin) {
         _logpe("Failed to create mupen64plus binary path string");
         return -1;
     }
@@ -285,27 +268,28 @@ int mup_load_bin(const char *path)
     return 0;
 }
 
-int mup_load_rom(const char *path)
+int mup_load_rom(mup_proc_t *mp, const char *path)
 {
     if (strlen(path) == 0) {
         _logp("Error: empty ROM path");
         return -1;
     }
 
-    if (mup_cmd_list.rom) {
-        free(mup_cmd_list.rom);
-        mup_cmd_list.rom = NULL;
+    if (mp->cmd_list.rom) {
+        free(mp->cmd_list.rom);
+        mp->cmd_list.rom = NULL;
     }
 
-    mup_cmd_list.rom = strdup(path);
-    if (!mup_cmd_list.rom) {
+    mp->cmd_list.rom = strdup(path);
+    if (!mp->cmd_list.rom) {
         _logpe("Failed to create ROM path string");
         return -1;
     }
 
-    if (mup_initialized) {
-        free(mup_cmd[rom_index]);
-        mup_cmd[rom_index] = mup_cmd_list.rom;
+    if (mp->initialized) {
+        if (mp->cmd[mp->rom_index])
+            free(mp->cmd[mp->rom_index]);
+        mp->cmd[mp->rom_index] = mp->cmd_list.rom;
     }
 
     _log("ROM loaded: %s", path);
@@ -314,13 +298,55 @@ int mup_load_rom(const char *path)
     return 0;
 }
 
-int mup_wait(void)
+int mup_set_race(mup_proc_t *mp, const char *track_categ, int ghost_type)
+{
+    char *tmp = NULL;
+
+    if (mp->save_path)
+        free(mp->save_path;
+
+    switch(ghost_type) {
+    case GHOST_DEF:
+        __attribute__((fallthrough));
+    case GHOST_USR:
+        if (asprintf(&(mp->save_path), "%s%s%s%s%s", getenv("HOME"), MK64T_BASE_PATH, 
+                     get_save_dir_path(track_categ, ghost_type), "/", mp->rom_mup_id_buf) == -1) {
+            _logp("Failed to create SRAM path string");
+            return -1;
+        }
+        break;
+    case GHOST_REC:
+        if (asprintf(&(mp->save_path), "%s%s%s%s", getenv("HOME"), MK64T_BASE_PATH, 
+                     get_save_dir_path(track_categ, ghost_type)) == -1) {
+            _logp("Failed to create SRAM path string");
+            return -1;
+        }
+        break;
+    }
+    if (asprintf(%tmp, "%s%s", CORE_SRAM_EQ, mp->save_path) == -1) {
+        _logp("Failed to create SRAM opt string");
+        return -1;
+    }
+
+    if (ghost_type != GHOST_REC && mkdir_p(mp->save_path, MK64T_DIR_MODE))
+        return -1;
+
+    mp->ghost_type = ghost_type;
+    strncpy(mp->track_categ, track_categ, TRACK_CATEG_BUF_SIZE);
+
+    mup_arg_add(tmp);
+    free(tmp);
+
+    return 0;
+}
+
+int mup_wait(mup_proc_t *mp)
 {
     int wstatus;
     pid_t wpid;
 
     do {
-        wpid = waitpid(-mup_pid, &wstatus, 0);
+        wpid = waitpid(-(mp->pid), &wstatus, 0);
     } while (wpid == -1 && errno == EINTR);
     if (wpid == -1) {
         _logpe("Mupen64plus process waitpid failed");
@@ -335,32 +361,36 @@ int mup_wait(void)
     else
         _logp("Mupen64plus process exited with unknown status (%d)", wstatus);
 
-    mup_pid = -1;
-    close(mup_pty_fd);
+    mp->pid = -1;
+
+    if (mp->pty_fd >= 0) {
+        fclose(mp->pty_fd);
+        mp->pty_fd = -1;
+    }
 
     return 0;
 }
 
-const char* mup_get_err_msg(void)
+const char* mup_get_err_msg(mup_proc_t *mp)
 {
-    return mup_err_buf;
+    return mp->err_buf;
 }
 
-bool mup_err(void)
+bool mup_err(mup_proc_t *mp)
 {
-    return mup_err_occurred;
+    return mp->error_occurred;
 }
 
-int mup_start(void)
+int mup_start(mup_proc_t *mp)
 {
-    if (mup_running())
-        if (mup_stop()) 
+    if (mup_running(mp))
+        if (mup_stop(mp)) 
             return -1;
-    if (mup_start_impl())
+    if (mup_start_impl(mp))
         return -1;
-    if (get_rom_info()) {
-        if (mup_err())
-            if (mup_stop()) 
+    if (get_rom_info(mp)) {
+        if (mup_err(mp))
+            if (mup_stop(mp)) 
                 return -1;
         return -1;
     }
@@ -368,39 +398,62 @@ int mup_start(void)
     return 0;
 }
 
-const char* mup_rom_goodname(void)
+const char* mup_rom_goodname(mup_proc_t *mp)
 {
-    return rom_goodname_buf;
+    return mp->rom_goodname_buf;
 }
 
-const char* mup_rom_md5(void)
+const char* mup_rom_md5(mup_pro_t *mp)
 {
-    return rom_md5_buf;
+    return mp->rom_md5_buf;
 }
 
-const char* mup_rom_imagetype(void)
+const char* mup_rom_imagetype(mup_proc_t *mp)
 {
-    return rom_imagetype_buf;
+    return mp->rom_imagetype_buf;
 }
 
-const char* mup_rom_country(void)
+const char* mup_rom_country(mup_proc_t *mp)
 {
-    return rom_country_buf;
+    return mp->rom_country_buf;
 }
 
-const char* rom_mup_id(void)
+const char* rom_mup_id(mup_proc_t *mp)
 {
-    return rom_mup_id_buf;
+    return mp->rom_mup_id_buf;
 }
 
-void mup_cleanup(void)
+int mup_cleanup(mup_proc_t *mp)
 {
-    if (mup_save_dir) {
-        free(mup_save_dir);
-        mup_save_dir = NULL;
+    _logp("Cleaning up mupen64plus process...");
+
+    if (mup_stop(mp))
+        return -1;
+
+    mp->initialized = false;
+
+    destroy_mup_cmd_list(mp);
+    destroy_mup_cmd(mp);
+
+    if (mp->config_path) {
+        free(mp->config_path);
+        mp->config_path = NULL;
     }
-    destroy_mup_cmd_list();
-    destroy_mup_cmd();
+    if (mp->save_path) {
+        free(mp->save_path);
+        mp->save_path = NULL;
+    }
+
+    mp->rom_goodname_buf[0] = '\0';
+    mp->rom_md5_buf[0] = '\0';
+    mp->rom_country_buf[0] = '\0';
+    mp->rom_imagetype_buf[0] = '\0';
+    mp->rom_mup_id_buf[0] = '\0';
+
+    mp->error_occurred = false;
+    mp->err_buf[0] = '\0';
+
+    return 0;
 }
 
 
@@ -431,31 +484,32 @@ static int get_screen_resolution(int *w, int *h)
     return 0;
 }
 
-static void destroy_mup_cmd_list(void)
+static void destroy_mup_cmd_list(mup_proc_t *mp)
 {
     mup_cmd_list_arg_t *curr_arg;
     mup_cmd_list_arg_t *next_arg;
 
-    if (mup_cmd_list.bin) {
-        free(mup_cmd_list.bin);
-        mup_cmd_list.bin = NULL;
+    if (mp->cmd_list.bin) {
+        free(mp->cmd_list.bin);
+        mp->cmd_list.bin = NULL;
     }
-    if (mup_cmd_list.rom) {
-        free(mup_cmd_list.rom);
-        mup_cmd_list.rom = NULL;
+    if (mp->cmd_list.rom) {
+        free(mp->cmd_list.rom);
+        mp->cmd_list.rom = NULL;
     }
 
-    curr_arg = mup_cmd_list.head;
+    curr_arg = mp->cmd_list.head;
     while (curr_arg) {
         next_arg = curr_arg->next;
-        free(curr_arg->str);
+        if (curr_arg->str)
+            free(curr_arg->str);
         free(curr_arg);
         curr_arg = next_arg;
     }
-    mup_cmd_list.arg_head = NULL;
-    mup_cmd_list.arg_tail = NULL;
 
-    mup_cmd_list.arg_count = 0;
+    mp->cmd_list.arg_head = NULL;
+    mp->cmd_list.arg_tail = NULL;
+    mp->cmd_list.arg_count = 0;
 }
 
 static mup_arg_t* mup_cmd_list_arg_create(const char *str)
@@ -485,7 +539,7 @@ static bool mup_cmd_list_arg_is_set(const char *str)
 {
     mup_cmd_list_arg_t *curr = NULL;
 
-    curr = mup_cmd_list.head;
+    curr = mp->cmd_list.head;
     while (curr) {
         if (strstr(curr->str, str) != NULL)
             return true;
@@ -495,12 +549,12 @@ static bool mup_cmd_list_arg_is_set(const char *str)
     return false;
 }
 
-static void destroy_mup_cmd(void)
+static void destroy_mup_cmd(mup_proc_t *mp)
 {
-    if (!mup_cmd)
+    if (!mp->cmd)
         return;
-    free(mup_cmd);
-    mup_cmd = NULL;
+    free(mp->cmd);
+    mp->cmd = NULL;
 }
 
 static int mup_start_impl(void)
@@ -508,7 +562,7 @@ static int mup_start_impl(void)
     int arg_tog;
     char arg_color[12];
 
-    if (!mup_initialized) {
+    if (!mp->initialized) {
         _logp("Failed to start mupen64plus: not initialized");
         return -1;
     }
@@ -518,39 +572,39 @@ static int mup_start_impl(void)
 #ifdef DEBUG
     // Print command
     arg_tog = 0;
-    for (int i = 0; mup_cmd[i] != NULL; ++i) {
+    for (int i = 0; mp->cmd[i] != NULL; ++i) {
         if (i == 0)
-            _logpf(YELLOW "%s ", mup_cmd[i]);
-        else if (mup_cmd[i+1] == NULL)
-            _logpf(PURPLE "%s" R "\n", mup_cmd[i]);
-        else if (strstr(mup_cmd[i], "--")) {
+            _logpf(YELLOW "%s ", mp->cmd[i]);
+        else if (mp->cmd[i+1] == NULL)
+            _logpf(PURPLE "%s" R "\n", mp->cmd[i]);
+        else if (strstr(mp->cmd[i], "--")) {
             if (arg_tog == 0) {
-                _logpf(GREEN "%s ", mup_cmd[i]);
+                _logpf(GREEN "%s ", mp->cmd[i]);
                 arg_tog = 1;
             } else {
-                _logpf(CYAN "%s ", mup_cmd[i]);
+                _logpf(CYAN "%s ", mp->cmd[i]);
                 arg_tog = 0;
             }
         } else {
-            _logpf("%s ", mup_cmd[i]);
+            _logpf("%s ", mp->cmd[i]);
         }
     }
 #endif
 
     // Log command
     _log("Command:\n-----------");
-    for (int i = 0; mup_cmd[i] != NULL; ++i)
-        _logf("%s ", mup_cmd[i]);
+    for (int i = 0; mp->cmd[i] != NULL; ++i)
+        _logf("%s ", mp->cmd[i]);
     _logf("\n-----------\n");
 
 
-    mup_pid = forkpty(&mup_pty_fd, NULL, NULL, NULL);
+    mp->pid = forkpty(&mp->pty_fd, NULL, NULL, NULL);
 
-    if (mup_pid == -1) {
+    if (mp->pid == -1) {
         _logpe("Mupen64plus fork failed");
         return -1;
-    } else if (mup_pid == 0) {
-        execvp(mup_cmd[0], mup_cmd);
+    } else if (mp->pid == 0) {
+        execvp(mp->cmd[0], mp->cmd);
         perror("Mupen64plus execvp failed");
         _exit(127);
     } 
@@ -583,7 +637,7 @@ static int get_rom_key_val(const char *buf, const char *key, char *ret_buf)
 /*
     Get info from mupen64plus terminal output
 */
-static int get_rom_info(void)
+static int get_rom_info(mup_proc_t *mp)
 {
     int i;
     ssize_t bytes = 0;
@@ -606,7 +660,7 @@ static int get_rom_info(void)
         if (buf_offset >= (int)(sizeof(buf) - 1))
             break;
 
-        bytes = read(mup_pty_fd, buf + buf_offset, sizeof(buf)-buf_offset-1);
+        bytes = read(mp->pty_fd, buf + buf_offset, sizeof(buf)-buf_offset-1);
         if (bytes == -1 && errno != EAGAIN) {
             _logpe("Failed to read mupen64plus file descriptor");
             return -1;
@@ -625,7 +679,7 @@ static int get_rom_info(void)
             break;
     }
 
-    mup_err_occurred = false;
+    mp->error_occurred = false;
 
     // UI-Console Error
     ptr = strstr(buf, ui_error_key);
@@ -633,11 +687,11 @@ static int get_rom_info(void)
         i = 0;
         ptr += strlen(ui_error_key) + strlen(": ");
         while (*ptr != '\r' && *ptr != '\n' && *ptr != '\0' && i < MUP_ERR_BUF_SIZE-1)
-            mup_err_buf[i++] = *ptr++;
-        mup_err_buf[i] = '\0';
-        mup_err_occurred = true;
-        _logpf(GREEN "Mupen64plus" R ": " RED "%s" R "\n", mup_err_buf);
-        _log("%s", mup_err_buf);
+            mp->err_buf[i++] = *ptr++;
+        mp->err_buf[i] = '\0';
+        mp->error_occurred = true;
+        _logpf(GREEN "Mupen64plus" R ": " RED "%s" R "\n", mp->err_buf);
+        _log("%s", mp->err_buf);
         return -1;
     }
 
@@ -653,13 +707,13 @@ static int get_rom_info(void)
         _log("%s", warn_buf);
     }
 
-    get_rom_key_val(buf, goodname_key, rom_goodname_buf);
-    get_rom_key_val(buf, md5_key, rom_md5_buf);
-    get_rom_key_val(buf, imagetype_key, rom_imagetype_buf);
-    get_rom_key_val(buf, country_key, rom_country_buf);
+    get_rom_key_val(buf, goodname_key, mp->rom_goodname_buf);
+    get_rom_key_val(buf, md5_key, mp->rom_md5_buf);
+    get_rom_key_val(buf, imagetype_key, mp->rom_imagetype_buf);
+    get_rom_key_val(buf, country_key, mp->rom_country_buf);
 
-    sprintf(rom_mup_id_buf, ROM_INFO_BUF_SIZE, "%s-%.*s", 
-            rom_goodname_buf, 8, rom_md5_buf);
+    sprintf(mp->rom_mup_id_buf, ROM_INFO_BUF_SIZE, "%s-%.*s", 
+            mp->rom_goodname_buf, 8, mp->rom_md5_buf);
 
     return 0;
 }
